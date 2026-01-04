@@ -13,7 +13,8 @@ import {
   ChevronRight,
   Info,
   ShieldCheck,
-  Loader2
+  Loader2,
+  Copy
 } from 'lucide-react';
 import { RulePart, FileItem, PreviewItem, AppSettings, RuleType } from './types';
 import { formatSize, getTodayStr } from './utils/formatters';
@@ -46,10 +47,8 @@ const App: React.FC = () => {
   // Helper to refresh file list from source folder
   const refreshFileList = async (handle: FileSystemDirectoryHandle) => {
     const fileList: FileItem[] = [];
-    // Cast handle to any to use iteration which might not be correctly typed in all environments
     for await (const entry of (handle as any).values()) {
       if (entry.kind === 'file') {
-        // Fix: Use 'as any' to access getFile() on a FileSystemHandle that we know is a file
         const file = await (entry as any).getFile();
         const lastDotIndex = file.name.lastIndexOf('.');
         fileList.push({
@@ -67,7 +66,7 @@ const App: React.FC = () => {
   const pickSourceFolder = async () => {
     try {
       const handle = await (window as any).showDirectoryPicker({
-        mode: 'readwrite'
+        mode: 'read' // Read-only is enough for source now
       });
       setSourceHandle(handle);
       setSettings(s => ({ ...s, sourcePath: handle.name }));
@@ -162,11 +161,9 @@ const App: React.FC = () => {
     const results: PreviewItem[] = [];
 
     try {
-      // Browsers often require explicit permission for write access even if 'readwrite' mode was requested.
-      // Fix: Cast handle to any for permission methods that might not be in the default TypeScript FileSystemDirectoryHandle interface.
-      const sourcePermission = await (sourceHandle as any).queryPermission({ mode: 'readwrite' });
+      const sourcePermission = await (sourceHandle as any).queryPermission({ mode: 'read' });
       if (sourcePermission !== 'granted') {
-        await (sourceHandle as any).requestPermission({ mode: 'readwrite' });
+        await (sourceHandle as any).requestPermission({ mode: 'read' });
       }
       
       const targetPermission = await (targetHandle as any).queryPermission({ mode: 'readwrite' });
@@ -184,20 +181,18 @@ const App: React.FC = () => {
           // 2. Create new file handle in target
           const newFileHandle = await targetHandle.getFileHandle(item.newName, { create: true });
           
-          // 3. Write data to new file
+          // 3. Write data to new file (Copy process)
           const writable = await (newFileHandle as any).createWritable();
           await writable.write(fileData);
           await writable.close();
 
-          // 4. Remove original file (effectively a move)
-          // If source and target are different, this is a move. 
-          // If they are the same, this acts as a rename within the same folder.
-          await sourceHandle.removeEntry(originalFileName);
+          // NOTE: We no longer remove the original file from the source handle.
+          // This satisfies the requirement to not change the source folder content.
 
           results.push({
             ...item,
             status: 'success',
-            message: '完了'
+            message: 'コピー完了'
           });
         } catch (err: any) {
           console.error(`Error processing ${item.originalName}:`, err);
@@ -211,7 +206,8 @@ const App: React.FC = () => {
 
       setLogs(results);
       setShowLog(true);
-      // Refresh the file list to show remaining files
+      // We don't strictly need to refresh source since nothing changed, 
+      // but it's good practice in case the folder was modified externally.
       await refreshFileList(sourceHandle);
 
     } catch (err: any) {
@@ -231,7 +227,7 @@ const App: React.FC = () => {
             </div>
             <div>
               <h1 className="text-xl font-bold text-slate-900 tracking-tight">スマート・ファイル整理 Pro</h1>
-              <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest opacity-70">Automated Renaming & Move</p>
+              <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest opacity-70">Automated Copy & Renaming</p>
             </div>
           </div>
           <button 
@@ -254,7 +250,7 @@ const App: React.FC = () => {
               </div>
               <div className="space-y-5">
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-400 mb-2 uppercase tracking-wider">ソース（元のフォルダ）</label>
+                  <label className="block text-[11px] font-bold text-slate-400 mb-2 uppercase tracking-wider">ソース（元のフォルダ・変更なし）</label>
                   <div className="flex gap-2">
                     <div className="flex-1 relative">
                       <input 
@@ -276,7 +272,7 @@ const App: React.FC = () => {
                   </div>
                 </div>
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-400 mb-2 uppercase tracking-wider">ターゲット（整理先フォルダ）</label>
+                  <label className="block text-[11px] font-bold text-slate-400 mb-2 uppercase tracking-wider">ターゲット（リネーム後の保存先）</label>
                   <div className="flex gap-2">
                     <div className="flex-1 relative">
                       <input 
@@ -363,14 +359,14 @@ const App: React.FC = () => {
           </div>
 
           <div className="lg:col-span-8 flex flex-col gap-4 overflow-hidden">
-            <section className="bg-amber-50 border border-amber-100 rounded-2xl p-4 flex items-start gap-4 shadow-sm">
-              <div className="bg-amber-500 text-white p-2 rounded-xl shrink-0">
-                <AlertCircle className="w-5 h-5" />
+            <section className="bg-blue-50 border border-blue-100 rounded-2xl p-4 flex items-start gap-4 shadow-sm">
+              <div className="bg-blue-500 text-white p-2 rounded-xl shrink-0">
+                <Info className="w-5 h-5" />
               </div>
               <div>
-                <h3 className="text-sm font-bold text-amber-900">注意事項</h3>
-                <p className="text-xs text-amber-800/80 mt-1 leading-relaxed">
-                  実行するとファイルは<strong className="text-amber-950 underline underline-offset-2">物理的に移動・リネーム</strong>されます。移動先に同名のファイルがある場合は上書きされますのでご注意ください。
+                <h3 className="text-sm font-bold text-blue-900">お知らせ</h3>
+                <p className="text-xs text-blue-800/80 mt-1 leading-relaxed">
+                  実行するとファイルはリネームされ、ターゲットフォルダへ<strong className="text-blue-950 underline underline-offset-2">コピー</strong>されます。ソース（元のフォルダ）の中身は変更されません。
                 </p>
               </div>
             </section>
@@ -401,8 +397,8 @@ const App: React.FC = () => {
                     </>
                   ) : (
                     <>
-                      <Play className="w-4 h-4 fill-current" />
-                      一括リネーム ＆ 移動実行
+                      <Copy className="w-4 h-4" />
+                      一括リネーム ＆ コピー実行
                     </>
                   )}
                 </button>
@@ -461,9 +457,9 @@ const App: React.FC = () => {
                                 <CheckCircle2 className="w-10 h-10 text-green-600" />
                               </div>
                               <div className="space-y-1">
-                                <h3 className="text-xl font-bold text-slate-900">すべての整理が完了しました！</h3>
+                                <h3 className="text-xl font-bold text-slate-900">コピー整理が完了しました！</h3>
                                 <p className="text-sm text-slate-500">
-                                  {logs.filter(l => l.status === 'success').length} 件のファイルを移動しました。
+                                  {logs.filter(l => l.status === 'success').length} 件のファイルをターゲットへ出力しました。
                                 </p>
                               </div>
                               <button 
@@ -511,7 +507,7 @@ const App: React.FC = () => {
                 </div>
                 <div>
                   <h2 className="text-2xl font-black text-slate-900 tracking-tight">処理レポート</h2>
-                  <p className="text-xs text-slate-400 font-bold uppercase tracking-wider mt-0.5">Summary of automated actions</p>
+                  <p className="text-xs text-slate-400 font-bold uppercase tracking-wider mt-0.5">Summary of automated copy actions</p>
                 </div>
               </div>
               <button 
@@ -542,12 +538,12 @@ const App: React.FC = () => {
                     
                     <div className="grid grid-cols-1 md:grid-cols-[1fr,auto,1fr] gap-4 items-center">
                       <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
-                        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Before</p>
+                        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Source (Unchanged)</p>
                         <p className="text-sm font-medium text-slate-600 truncate">{log.originalName}.{log.extension}</p>
                       </div>
                       <ChevronRight className="w-5 h-5 text-slate-200 hidden md:block" />
                       <div className="bg-blue-50/50 p-3 rounded-xl border border-blue-100">
-                        <p className="text-[9px] font-bold text-blue-400 uppercase tracking-widest mb-1">After</p>
+                        <p className="text-[9px] font-bold text-blue-400 uppercase tracking-widest mb-1">Target (Copied & Renamed)</p>
                         <p className="text-sm font-black text-blue-700 truncate">{log.newName}</p>
                       </div>
                     </div>
@@ -561,7 +557,7 @@ const App: React.FC = () => {
                     
                     <div className="mt-4 pt-4 border-t border-slate-50 flex items-center justify-between">
                       <p className="text-[10px] font-bold text-slate-400 truncate max-w-[80%]">
-                        <span className="opacity-50">Saved to:</span> {log.targetPath}
+                        <span className="opacity-50">Target Path:</span> {log.targetPath}
                       </p>
                       <p className="text-[10px] font-black text-slate-500">{formatSize(log.size)}</p>
                     </div>
@@ -584,7 +580,7 @@ const App: React.FC = () => {
 
       <footer className="bg-slate-50 py-3 px-6 text-center border-t border-slate-200">
         <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-          Smart File Organizer Pro • Finalized v1.2.0 • Real Move & Rename Logic Ready
+          Smart File Organizer Pro • Finalized v1.3.0 • Copy & Rename Logic Active (Safe Mode)
         </p>
       </footer>
       
