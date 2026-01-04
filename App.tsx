@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo } from 'react';
 import { 
   FolderOpen, 
   Settings, 
@@ -11,24 +11,22 @@ import {
   AlertCircle,
   Clock,
   ChevronRight,
-  Info
+  Info,
+  ShieldCheck,
+  Loader2
 } from 'lucide-react';
 import { RulePart, FileItem, PreviewItem, AppSettings, RuleType } from './types';
 import { formatSize, getTodayStr } from './utils/formatters';
 import RuleChip from './components/RuleChip';
 
-const INITIAL_FILES: FileItem[] = [
-  { id: '1', originalName: 'IMG_2023_99', extension: 'jpg', size: 2450000, createdAt: '2023-12-20' },
-  { id: '2', originalName: 'scan-document-01', extension: 'pdf', size: 1200000, createdAt: '2023-12-21' },
-  { id: '3', originalName: 'final_version_v2', extension: 'docx', size: 45000, createdAt: '2023-12-22' },
-  { id: '4', originalName: 'memo_backup', extension: 'txt', size: 1200, createdAt: '2023-12-23' },
-];
-
 const App: React.FC = () => {
-  // State
+  // Handles for real directory access
+  const [sourceHandle, setSourceHandle] = useState<FileSystemDirectoryHandle | null>(null);
+  const [targetHandle, setTargetHandle] = useState<FileSystemDirectoryHandle | null>(null);
+
   const [settings, setSettings] = useState<AppSettings>({
-    sourcePath: 'C:\\Users\\Staff\\Downloads\\Unsorted',
-    targetPath: 'C:\\Users\\Staff\\Documents\\Organized',
+    sourcePath: '',
+    targetPath: '',
     delimiter: '_',
     sequenceDigits: 2,
   });
@@ -39,15 +37,58 @@ const App: React.FC = () => {
     { id: 'r3', type: 'sequence', enabled: true },
   ]);
 
-  const [files, setFiles] = useState<FileItem[]>(INITIAL_FILES);
+  const [files, setFiles] = useState<FileItem[]>([]);
   const [processing, setProcessing] = useState(false);
   const [showLog, setShowLog] = useState(false);
   const [logs, setLogs] = useState<PreviewItem[]>([]);
-
-  // Drag and Drop state
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
 
-  // Derived State (Preview calculation)
+  // Helper to refresh file list from source folder
+  const refreshFileList = async (handle: FileSystemDirectoryHandle) => {
+    const fileList: FileItem[] = [];
+    // Cast handle to any to use iteration which might not be correctly typed in all environments
+    for await (const entry of (handle as any).values()) {
+      if (entry.kind === 'file') {
+        // Fix: Use 'as any' to access getFile() on a FileSystemHandle that we know is a file
+        const file = await (entry as any).getFile();
+        const lastDotIndex = file.name.lastIndexOf('.');
+        fileList.push({
+          id: Math.random().toString(36).substr(2, 9),
+          originalName: lastDotIndex !== -1 ? file.name.substring(0, lastDotIndex) : file.name,
+          extension: lastDotIndex !== -1 ? file.name.substring(lastDotIndex + 1) : '',
+          size: file.size,
+          createdAt: new Date(file.lastModified).toISOString().split('T')[0]
+        });
+      }
+    }
+    setFiles(fileList);
+  };
+
+  const pickSourceFolder = async () => {
+    try {
+      const handle = await (window as any).showDirectoryPicker({
+        mode: 'readwrite'
+      });
+      setSourceHandle(handle);
+      setSettings(s => ({ ...s, sourcePath: handle.name }));
+      await refreshFileList(handle);
+    } catch (err) {
+      console.error('Source folder selection failed', err);
+    }
+  };
+
+  const pickTargetFolder = async () => {
+    try {
+      const handle = await (window as any).showDirectoryPicker({
+        mode: 'readwrite'
+      });
+      setTargetHandle(handle);
+      setSettings(s => ({ ...s, targetPath: handle.name }));
+    } catch (err) {
+      console.error('Target folder selection failed', err);
+    }
+  };
+
   const previews = useMemo(() => {
     return files.map((file, index) => {
       const parts: string[] = [];
@@ -69,13 +110,12 @@ const App: React.FC = () => {
       return {
         ...file,
         newName: `${newBaseName}.${file.extension}`,
-        targetPath: `${settings.targetPath}\\${newBaseName}.${file.extension}`,
+        targetPath: `${settings.targetPath}/${newBaseName}.${file.extension}`,
         status: 'pending' as const,
       };
     });
   }, [files, rules, settings]);
 
-  // Handlers
   const addRule = (type: RuleType) => {
     const newRule: RulePart = {
       id: Math.random().toString(36).substr(2, 9),
@@ -94,11 +134,9 @@ const App: React.FC = () => {
     setRules(rules.map(r => r.id === id ? { ...r, value } : r));
   };
 
-  // Live Reordering Logic
   const handleDragStart = (e: React.DragEvent, index: number) => {
     setDraggedIndex(index);
     e.dataTransfer.effectAllowed = "move";
-    // Set a transparent drag image to avoid double visual
     const img = new Image();
     img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
     e.dataTransfer.setDragImage(img, 0, 0);
@@ -106,120 +144,172 @@ const App: React.FC = () => {
 
   const handleDragEnter = (e: React.DragEvent, targetIndex: number) => {
     if (draggedIndex === null || draggedIndex === targetIndex) return;
-
     const newRules = [...rules];
     const draggedItem = newRules[draggedIndex];
     newRules.splice(draggedIndex, 1);
     newRules.splice(targetIndex, 0, draggedItem);
-    
     setDraggedIndex(targetIndex);
     setRules(newRules);
   };
 
-  const handleDragEnd = () => {
-    setDraggedIndex(null);
-  };
-
   const executeRenaming = async () => {
-    setProcessing(true);
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    const results = previews.map(p => ({
-      ...p,
-      status: 'success' as const,
-      message: '整理完了しました'
-    }));
-    setLogs(results);
-    setFiles([]);
-    setProcessing(false);
-    setShowLog(true);
-  };
+    if (!sourceHandle || !targetHandle) {
+      alert("フォルダ設定が完了していません。");
+      return;
+    }
 
-  const resetSimulation = () => {
-    setFiles(INITIAL_FILES);
-    setLogs([]);
-    setShowLog(false);
+    setProcessing(true);
+    const results: PreviewItem[] = [];
+
+    try {
+      // Browsers often require explicit permission for write access even if 'readwrite' mode was requested.
+      // Fix: Cast handle to any for permission methods that might not be in the default TypeScript FileSystemDirectoryHandle interface.
+      const sourcePermission = await (sourceHandle as any).queryPermission({ mode: 'readwrite' });
+      if (sourcePermission !== 'granted') {
+        await (sourceHandle as any).requestPermission({ mode: 'readwrite' });
+      }
+      
+      const targetPermission = await (targetHandle as any).queryPermission({ mode: 'readwrite' });
+      if (targetPermission !== 'granted') {
+        await (targetHandle as any).requestPermission({ mode: 'readwrite' });
+      }
+
+      for (const item of previews) {
+        try {
+          // 1. Original file handle from source
+          const originalFileName = `${item.originalName}.${item.extension}`;
+          const fileHandle = await sourceHandle.getFileHandle(originalFileName);
+          const fileData = await fileHandle.getFile();
+
+          // 2. Create new file handle in target
+          const newFileHandle = await targetHandle.getFileHandle(item.newName, { create: true });
+          
+          // 3. Write data to new file
+          const writable = await (newFileHandle as any).createWritable();
+          await writable.write(fileData);
+          await writable.close();
+
+          // 4. Remove original file (effectively a move)
+          // If source and target are different, this is a move. 
+          // If they are the same, this acts as a rename within the same folder.
+          await sourceHandle.removeEntry(originalFileName);
+
+          results.push({
+            ...item,
+            status: 'success',
+            message: '完了'
+          });
+        } catch (err: any) {
+          console.error(`Error processing ${item.originalName}:`, err);
+          results.push({
+            ...item,
+            status: 'error',
+            message: err.message || 'エラーが発生しました'
+          });
+        }
+      }
+
+      setLogs(results);
+      setShowLog(true);
+      // Refresh the file list to show remaining files
+      await refreshFileList(sourceHandle);
+
+    } catch (err: any) {
+      alert(`処理に失敗しました: ${err.message}`);
+    } finally {
+      setProcessing(false);
+    }
   };
 
   return (
     <div className="min-h-screen flex flex-col">
-      <header className="bg-white border-b border-slate-200 px-6 py-4">
+      <header className="bg-white border-b border-slate-200 px-6 py-4 shadow-sm">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="bg-blue-600 p-2 rounded-lg">
+            <div className="bg-blue-600 p-2 rounded-lg shadow-md shadow-blue-100">
               <RefreshCcw className="text-white w-6 h-6" />
             </div>
             <div>
-              <h1 className="text-xl font-bold text-slate-900">スマート・ファイル整理 Pro</h1>
-              <p className="text-xs text-slate-500 font-medium uppercase tracking-wider">File Automation Utility</p>
+              <h1 className="text-xl font-bold text-slate-900 tracking-tight">スマート・ファイル整理 Pro</h1>
+              <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest opacity-70">Automated Renaming & Move</p>
             </div>
           </div>
-          <div className="flex items-center gap-4">
-            <button 
-              onClick={resetSimulation}
-              className="text-sm font-medium text-slate-500 hover:text-slate-800 flex items-center gap-1 px-3 py-1.5 rounded-md hover:bg-slate-100 transition-colors"
-            >
-              <RefreshCcw className="w-4 h-4" />
-              シミュレーションリセット
-            </button>
-          </div>
+          <button 
+            onClick={() => {setFiles([]); setLogs([]); setShowLog(false); setSourceHandle(null); setTargetHandle(null); setSettings(s => ({...s, sourcePath: '', targetPath: ''}))}}
+            className="text-sm font-bold text-slate-500 hover:text-red-500 flex items-center gap-1.5 px-3 py-1.5 rounded-md hover:bg-red-50 transition-all"
+          >
+            <RefreshCcw className="w-4 h-4" />
+            リセット
+          </button>
         </div>
       </header>
 
       <main className="flex-1 p-6 overflow-hidden">
         <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6 h-full">
           <div className="lg:col-span-4 flex flex-col gap-6">
-            <section className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
-              <div className="flex items-center gap-2 mb-4 text-slate-800">
+            <section className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+              <div className="flex items-center gap-2 mb-6 text-slate-800 border-b border-slate-100 pb-3">
                 <Settings className="w-5 h-5 text-blue-500" />
                 <h2 className="font-bold">フォルダ設定</h2>
               </div>
-              <div className="space-y-4">
+              <div className="space-y-5">
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1 uppercase tracking-tight">ソース（元のフォルダ）</label>
+                  <label className="block text-[11px] font-bold text-slate-400 mb-2 uppercase tracking-wider">ソース（元のフォルダ）</label>
                   <div className="flex gap-2">
-                    <input 
-                      type="text" 
-                      readOnly 
-                      value={settings.sourcePath}
-                      className="flex-1 text-sm bg-slate-50 border border-slate-200 rounded px-3 py-2 text-slate-600 focus:outline-none"
-                    />
-                    <button className="bg-slate-100 p-2 rounded border border-slate-200 hover:bg-slate-200 transition-colors">
-                      <FolderOpen className="w-4 h-4 text-slate-600" />
+                    <div className="flex-1 relative">
+                      <input 
+                        type="text" 
+                        readOnly 
+                        placeholder="フォルダを選択してください..."
+                        value={settings.sourcePath}
+                        className="w-full text-sm bg-slate-50 border border-slate-200 rounded-xl pl-3 pr-9 py-2.5 text-slate-600 focus:outline-none transition-all focus:border-blue-300"
+                      />
+                      {sourceHandle && <ShieldCheck className="w-4 h-4 text-green-500 absolute right-3 top-3" />}
+                    </div>
+                    <button 
+                      onClick={pickSourceFolder}
+                      className="bg-white p-2.5 rounded-xl border border-slate-200 hover:border-blue-400 hover:bg-blue-50 transition-all group"
+                      title="フォルダを選択"
+                    >
+                      <FolderOpen className="w-5 h-5 text-slate-400 group-hover:text-blue-500" />
                     </button>
                   </div>
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1 uppercase tracking-tight">ターゲット（整理先フォルダ）</label>
+                  <label className="block text-[11px] font-bold text-slate-400 mb-2 uppercase tracking-wider">ターゲット（整理先フォルダ）</label>
                   <div className="flex gap-2">
-                    <input 
-                      type="text" 
-                      readOnly 
-                      value={settings.targetPath}
-                      className="flex-1 text-sm bg-slate-50 border border-slate-200 rounded px-3 py-2 text-slate-600 focus:outline-none"
-                    />
-                    <button className="bg-slate-100 p-2 rounded border border-slate-200 hover:bg-slate-200 transition-colors">
-                      <FolderOpen className="w-4 h-4 text-slate-600" />
+                    <div className="flex-1 relative">
+                      <input 
+                        type="text" 
+                        readOnly 
+                        placeholder="整理先を選択してください..."
+                        value={settings.targetPath}
+                        className="w-full text-sm bg-slate-50 border border-slate-200 rounded-xl pl-3 pr-9 py-2.5 text-slate-600 focus:outline-none transition-all focus:border-blue-300"
+                      />
+                      {targetHandle && <ShieldCheck className="w-4 h-4 text-green-500 absolute right-3 top-3" />}
+                    </div>
+                    <button 
+                      onClick={pickTargetFolder}
+                      className="bg-white p-2.5 rounded-xl border border-slate-200 hover:border-blue-400 hover:bg-blue-50 transition-all group"
+                      title="フォルダを選択"
+                    >
+                      <FolderOpen className="w-5 h-5 text-slate-400 group-hover:text-blue-500" />
                     </button>
                   </div>
                 </div>
               </div>
             </section>
 
-            <section className="bg-white rounded-xl shadow-sm border border-slate-200 p-5 flex-1 flex flex-col">
-              <div className="flex items-center justify-between mb-4">
+            <section className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex-1 flex flex-col">
+              <div className="flex items-center justify-between mb-6 border-b border-slate-100 pb-3">
                 <div className="flex items-center gap-2 text-slate-800">
                   <Play className="w-5 h-5 text-green-500" />
                   <h2 className="font-bold">命名ルールの構築</h2>
                 </div>
-                <div className="relative group">
-                  <Info className="w-4 h-4 text-slate-400 cursor-help" />
-                  <div className="absolute right-0 top-6 w-64 p-3 bg-slate-800 text-white text-xs rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
-                    チップを並び替えて構成を決定します。
-                  </div>
-                </div>
+                <Info className="w-4 h-4 text-slate-300 cursor-help" />
               </div>
 
-              <div className="space-y-3 mb-6 flex-1 overflow-y-auto max-h-[400px] pr-1">
+              <div className="space-y-3 mb-6 flex-1 overflow-y-auto max-h-[400px] pr-2 custom-scrollbar">
                 {rules.map((rule, idx) => (
                   <RuleChip
                     key={rule.id}
@@ -230,61 +320,41 @@ const App: React.FC = () => {
                     onUpdate={updateRuleValue}
                     onDragStart={handleDragStart}
                     onDragEnter={handleDragEnter}
-                    onDragEnd={handleDragEnd}
+                    onDragEnd={() => setDraggedIndex(null)}
                   />
                 ))}
-                {rules.length === 0 && (
-                  <div className="text-center py-8 border-2 border-dashed border-slate-100 rounded-lg text-slate-400 italic text-sm">
-                    ルールが追加されていません
-                  </div>
-                )}
               </div>
 
-              <div className="border-t border-slate-100 pt-4 space-y-4">
+              <div className="border-t border-slate-100 pt-5 space-y-4">
                 <div className="grid grid-cols-3 gap-2">
-                  <button 
-                    onClick={() => addRule('date')}
-                    className="flex flex-col items-center gap-1 p-2 bg-slate-50 hover:bg-blue-50 border border-slate-200 hover:border-blue-200 rounded text-[10px] font-bold text-slate-600 hover:text-blue-600 transition-all"
-                  >
-                    <Plus className="w-4 h-4" /> 日付
-                  </button>
-                  <button 
-                    onClick={() => addRule('sequence')}
-                    className="flex flex-col items-center gap-1 p-2 bg-slate-50 hover:bg-blue-50 border border-slate-200 hover:border-blue-200 rounded text-[10px] font-bold text-slate-600 hover:text-blue-600 transition-all"
-                  >
-                    <Plus className="w-4 h-4" /> 連番
-                  </button>
-                  <button 
-                    onClick={() => addRule('string')}
-                    className="flex flex-col items-center gap-1 p-2 bg-slate-50 hover:bg-blue-50 border border-slate-200 hover:border-blue-200 rounded text-[10px] font-bold text-slate-600 hover:text-blue-600 transition-all"
-                  >
-                    <Plus className="w-4 h-4" /> 固定文字
-                  </button>
+                  <button onClick={() => addRule('date')} className="flex flex-col items-center gap-1.5 p-2.5 bg-slate-50 hover:bg-blue-50 border border-slate-200 hover:border-blue-200 rounded-xl text-[11px] font-bold text-slate-600 hover:text-blue-600 transition-all active:scale-95"><Plus className="w-4 h-4" /> 日付</button>
+                  <button onClick={() => addRule('sequence')} className="flex flex-col items-center gap-1.5 p-2.5 bg-slate-50 hover:bg-blue-50 border border-slate-200 hover:border-blue-200 rounded-xl text-[11px] font-bold text-slate-600 hover:text-blue-600 transition-all active:scale-95"><Plus className="w-4 h-4" /> 連番</button>
+                  <button onClick={() => addRule('string')} className="flex flex-col items-center gap-1.5 p-2.5 bg-slate-50 hover:bg-blue-50 border border-slate-200 hover:border-blue-200 rounded-xl text-[11px] font-bold text-slate-600 hover:text-blue-600 transition-all active:scale-95"><Plus className="w-4 h-4" /> 固定文字</button>
                 </div>
 
-                <div className="flex gap-4 items-center">
+                <div className="flex gap-4 items-center bg-slate-50/50 p-3 rounded-xl border border-slate-100">
                   <div className="flex-1">
-                    <label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase">区切り文字</label>
+                    <label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase tracking-tight">区切り文字</label>
                     <select 
                       value={settings.delimiter}
                       onChange={(e) => setSettings({...settings, delimiter: e.target.value})}
-                      className="w-full text-sm border border-slate-200 rounded px-2 py-1.5"
+                      className="w-full text-xs font-medium border border-slate-200 rounded-lg px-2 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-100"
                     >
-                      <option value="_">アンダースコア (_)</option>
-                      <option value="-">ハイフン (-)</option>
-                      <option value=" ">スペース ( )</option>
+                      <option value="_">_ (アンダースコア)</option>
+                      <option value="-">- (ハイフン)</option>
+                      <option value=" "> (スペース)</option>
                       <option value="">なし</option>
                     </select>
                   </div>
                   <div className="flex-1">
-                    <label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase">連番の桁数</label>
+                    <label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase tracking-tight">連番の桁数</label>
                     <input 
                       type="number"
                       min="1"
                       max="5"
                       value={settings.sequenceDigits}
                       onChange={(e) => setSettings({...settings, sequenceDigits: parseInt(e.target.value) || 1})}
-                      className="w-full text-sm border border-slate-200 rounded px-2 py-1.5"
+                      className="w-full text-xs font-medium border border-slate-200 rounded-lg px-2 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-100"
                     />
                   </div>
                 </div>
@@ -293,91 +363,90 @@ const App: React.FC = () => {
           </div>
 
           <div className="lg:col-span-8 flex flex-col gap-4 overflow-hidden">
-            {/* 注意事項 (Moved above the Preview) */}
-            <section className="bg-orange-50 border border-orange-100 rounded-xl p-4 flex items-start gap-4 shadow-sm">
-              <div className="bg-orange-500 text-white p-2 rounded-lg shrink-0">
+            <section className="bg-amber-50 border border-amber-100 rounded-2xl p-4 flex items-start gap-4 shadow-sm">
+              <div className="bg-amber-500 text-white p-2 rounded-xl shrink-0">
                 <AlertCircle className="w-5 h-5" />
               </div>
               <div>
-                <h3 className="text-sm font-bold text-orange-900">注意事項</h3>
-                <p className="text-xs text-orange-800/80 mt-1 leading-relaxed">
-                  移動先に同名のファイルがある場合、自動的に上書きされます。必要に応じて事前のバックアップを行ってください。
+                <h3 className="text-sm font-bold text-amber-900">注意事項</h3>
+                <p className="text-xs text-amber-800/80 mt-1 leading-relaxed">
+                  実行するとファイルは<strong className="text-amber-950 underline underline-offset-2">物理的に移動・リネーム</strong>されます。移動先に同名のファイルがある場合は上書きされますのでご注意ください。
                 </p>
               </div>
             </section>
 
-            {/* 処理プレビュー */}
-            <section className="bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col flex-1 overflow-hidden">
-              <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+            <section className="bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col flex-1 overflow-hidden">
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/30">
                 <div className="flex items-center gap-2">
-                  <FileText className="w-5 h-5 text-orange-500" />
+                  <FileText className="w-5 h-5 text-blue-500" />
                   <h2 className="font-bold text-slate-800">処理プレビュー</h2>
-                  <span className="bg-slate-200 text-slate-700 text-[10px] font-bold px-2 py-0.5 rounded-full ml-2">
-                    {files.length} 件
+                  <span className="bg-blue-100 text-blue-700 text-[10px] font-bold px-2.5 py-1 rounded-full ml-2">
+                    {files.length} ファイル待機中
                   </span>
                 </div>
                 <button 
-                  disabled={files.length === 0 || processing}
+                  disabled={files.length === 0 || processing || !targetHandle}
                   onClick={executeRenaming}
                   className={`
-                    flex items-center gap-2 px-6 py-2 rounded-lg font-bold text-sm shadow-md transition-all
-                    ${files.length > 0 && !processing 
-                      ? 'bg-blue-600 hover:bg-blue-700 text-white active:scale-95' 
-                      : 'bg-slate-200 text-slate-400 cursor-not-allowed'}
+                    flex items-center gap-2 px-8 py-2.5 rounded-xl font-bold text-sm shadow-lg transition-all
+                    ${files.length > 0 && !processing && targetHandle
+                      ? 'bg-slate-900 hover:bg-black text-white active:scale-95 shadow-slate-200' 
+                      : 'bg-slate-100 text-slate-400 cursor-not-allowed shadow-none'}
                   `}
                 >
                   {processing ? (
                     <>
-                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      実行中...
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      処理中...
                     </>
                   ) : (
                     <>
                       <Play className="w-4 h-4 fill-current" />
-                      一括リネーム & 移動
+                      一括リネーム ＆ 移動実行
                     </>
                   )}
                 </button>
               </div>
 
-              <div className="flex-1 overflow-auto">
-                <table className="w-full text-left border-collapse min-w-[600px]">
-                  <thead className="sticky top-0 bg-white z-10 shadow-sm">
-                    <tr className="border-b border-slate-100">
-                      <th className="px-6 py-3 text-[10px] font-bold text-slate-400 uppercase tracking-wider">元のファイル名</th>
-                      <th className="px-2 py-3"></th>
-                      <th className="px-6 py-3 text-[10px] font-bold text-slate-400 uppercase tracking-wider">変更後のファイル名</th>
-                      <th className="px-6 py-3 text-[10px] font-bold text-slate-400 uppercase tracking-wider">サイズ / 作成日</th>
+              <div className="flex-1 overflow-auto custom-scrollbar">
+                <table className="w-full text-left border-collapse min-w-[700px]">
+                  <thead className="sticky top-0 bg-white z-10 shadow-sm border-b border-slate-100">
+                    <tr>
+                      <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">元の名前</th>
+                      <th className="px-2 py-4 text-center">
+                        <ChevronRight className="w-4 h-4 text-slate-200 mx-auto" />
+                      </th>
+                      <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">新しい名前</th>
+                      <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">サイズ / 日付</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-50">
                     {files.length > 0 ? previews.map((item) => (
-                      <tr key={item.id} className="hover:bg-slate-50/80 transition-colors group">
-                        <td className="px-6 py-4">
+                      <tr key={item.id} className="hover:bg-slate-50/50 transition-colors group">
+                        <td className="px-6 py-5">
                           <div className="flex items-center gap-3">
-                            <div className="bg-slate-100 p-2 rounded group-hover:bg-white transition-colors">
-                              <FileText className="w-4 h-4 text-slate-500" />
+                            <div className="bg-slate-100 p-2 rounded-lg">
+                              <FileText className="w-4 h-4 text-slate-400" />
                             </div>
-                            <div>
-                              <p className="text-sm font-medium text-slate-700">{item.originalName}.{item.extension}</p>
-                              <p className="text-[10px] text-slate-400">...{item.originalName.slice(-10)}</p>
-                            </div>
+                            <p className="text-sm font-medium text-slate-600 truncate max-w-[200px]">{item.originalName}.{item.extension}</p>
                           </div>
                         </td>
-                        <td className="px-2 py-4">
-                          <ChevronRight className="w-4 h-4 text-slate-300" />
+                        <td className="px-2 py-5">
+                          <ChevronRight className="w-4 h-4 text-blue-300 mx-auto opacity-0 group-hover:opacity-100 transition-opacity" />
                         </td>
-                        <td className="px-6 py-4">
-                          <p className="text-sm font-bold text-blue-600 bg-blue-50/50 px-2 py-1 rounded inline-block border border-blue-100">
-                            {item.newName}
-                          </p>
-                          <p className="text-[10px] text-slate-400 mt-1 truncate max-w-[200px]" title={item.targetPath}>
-                            {item.targetPath}
-                          </p>
+                        <td className="px-6 py-5">
+                          <div className="flex flex-col">
+                            <span className="text-sm font-bold text-blue-600 bg-blue-50/30 border border-blue-100 px-3 py-1.5 rounded-lg inline-block self-start">
+                              {item.newName}
+                            </span>
+                            <span className="text-[10px] text-slate-400 mt-2 flex items-center gap-1">
+                              <FolderOpen className="w-3 h-3" /> {item.targetPath}
+                            </span>
+                          </div>
                         </td>
-                        <td className="px-6 py-4">
-                          <p className="text-xs text-slate-600 font-medium">{formatSize(item.size)}</p>
-                          <div className="flex items-center gap-1 text-[10px] text-slate-400 mt-1">
+                        <td className="px-6 py-5 whitespace-nowrap">
+                          <p className="text-xs text-slate-700 font-bold">{formatSize(item.size)}</p>
+                          <div className="flex items-center gap-1.5 text-[10px] text-slate-400 mt-1.5 font-medium">
                             <Clock className="w-3 h-3" />
                             {item.createdAt}
                           </div>
@@ -385,31 +454,40 @@ const App: React.FC = () => {
                       </tr>
                     )) : (
                       <tr>
-                        <td colSpan={4} className="py-20 text-center">
+                        <td colSpan={4} className="py-24 text-center">
                           {logs.length > 0 ? (
-                            <div className="flex flex-col items-center gap-3">
-                              <div className="bg-green-100 p-4 rounded-full">
-                                <CheckCircle2 className="w-8 h-8 text-green-600" />
+                            <div className="flex flex-col items-center gap-4">
+                              <div className="bg-green-100 p-5 rounded-full shadow-inner animate-bounce">
+                                <CheckCircle2 className="w-10 h-10 text-green-600" />
                               </div>
-                              <div>
-                                <h3 className="text-lg font-bold text-slate-800">すべての処理が完了しました</h3>
-                                <p className="text-sm text-slate-500 mt-1">
-                                  {logs.length}件のファイルが移動先に保存されました。
+                              <div className="space-y-1">
+                                <h3 className="text-xl font-bold text-slate-900">すべての整理が完了しました！</h3>
+                                <p className="text-sm text-slate-500">
+                                  {logs.filter(l => l.status === 'success').length} 件のファイルを移動しました。
                                 </p>
                               </div>
                               <button 
-                                onClick={() => setShowLog(true)}
-                                className="mt-4 px-4 py-2 bg-slate-800 text-white rounded text-sm font-bold hover:bg-slate-900 transition-colors"
+                                onClick={() => setShowLog(true)} 
+                                className="mt-4 px-6 py-2.5 bg-slate-900 text-white rounded-xl text-sm font-bold hover:bg-black transition-all shadow-lg"
                               >
-                                実行ログを表示
+                                詳細ログを確認する
                               </button>
                             </div>
                           ) : (
-                            <div className="flex flex-col items-center text-slate-400 gap-2">
-                              <div className="p-4 bg-slate-50 rounded-full mb-2">
-                                <FolderOpen className="w-8 h-8 opacity-30" />
+                            <div className="flex flex-col items-center text-slate-400 gap-4 opacity-60">
+                              <div className="p-6 bg-slate-50 rounded-full border border-slate-100">
+                                <FolderOpen className="w-12 h-12 stroke-[1.5]" />
                               </div>
-                              <p className="text-sm">整理対象のファイルがありません</p>
+                              <div className="space-y-1">
+                                <p className="text-sm font-bold text-slate-500">整理対象のファイルが見つかりません</p>
+                                <p className="text-xs">まずは「ソースフォルダ」から読み込むフォルダを選んでください</p>
+                              </div>
+                              <button 
+                                onClick={pickSourceFolder} 
+                                className="mt-2 text-xs text-blue-600 font-bold px-4 py-2 bg-blue-50 rounded-full hover:bg-blue-100 transition-colors"
+                              >
+                                フォルダを選択
+                              </button>
                             </div>
                           )}
                         </td>
@@ -424,70 +502,98 @@ const App: React.FC = () => {
       </main>
 
       {showLog && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-6 animate-in fade-in duration-300">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[80vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-300">
-            <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
-              <div className="flex items-center gap-3">
-                <CheckCircle2 className="w-6 h-6 text-green-500" />
-                <h2 className="text-xl font-bold text-slate-900">実行ログ - 処理結果</h2>
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-md z-50 flex items-center justify-center p-6 animate-in fade-in duration-300">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-4xl max-h-[85vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-300">
+            <div className="p-7 border-b border-slate-100 flex items-center justify-between bg-white">
+              <div className="flex items-center gap-4">
+                <div className="bg-green-50 p-2 rounded-xl">
+                  <CheckCircle2 className="w-6 h-6 text-green-500" />
+                </div>
+                <div>
+                  <h2 className="text-2xl font-black text-slate-900 tracking-tight">処理レポート</h2>
+                  <p className="text-xs text-slate-400 font-bold uppercase tracking-wider mt-0.5">Summary of automated actions</p>
+                </div>
               </div>
               <button 
-                onClick={() => setShowLog(false)}
-                className="text-slate-400 hover:text-slate-600 p-2 hover:bg-slate-100 rounded-full transition-colors"
+                onClick={() => setShowLog(false)} 
+                className="text-slate-300 hover:text-slate-600 p-2 rounded-full hover:bg-slate-50 transition-all active:scale-90"
               >
-                <Plus className="w-6 h-6 rotate-45" />
+                <Plus className="w-8 h-8 rotate-45" />
               </button>
             </div>
             
-            <div className="flex-1 overflow-auto p-6">
-              <div className="space-y-4">
+            <div className="flex-1 overflow-auto p-8 bg-slate-50/30 custom-scrollbar">
+              <div className="grid gap-4">
                 {logs.map((log) => (
-                  <div key={log.id} className="flex items-start gap-4 p-4 border border-slate-100 rounded-xl hover:bg-slate-50/50 transition-colors">
-                    <div className="mt-1 bg-green-50 text-green-600 p-1.5 rounded">
-                      <CheckCircle2 className="w-4 h-4" />
+                  <div key={log.id} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:border-blue-200 transition-colors">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-2">
+                        {log.status === 'success' ? (
+                          <span className="text-[10px] font-black bg-green-100 text-green-700 px-2 py-0.5 rounded uppercase">Success</span>
+                        ) : (
+                          <span className="text-[10px] font-black bg-red-100 text-red-700 px-2 py-0.5 rounded uppercase">Error</span>
+                        )}
+                        <span className="text-[10px] font-bold text-slate-300">ID: {log.id}</span>
+                      </div>
+                      <span className="text-[10px] font-bold text-slate-400 flex items-center gap-1">
+                        <Clock className="w-3 h-3" /> {log.createdAt}
+                      </span>
                     </div>
-                    <div className="flex-1">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-xs font-bold text-slate-400 uppercase">Rename Success</span>
-                        <span className="text-[10px] font-medium text-green-600 bg-green-100 px-2 py-0.5 rounded-full">移動完了</span>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-[1fr,auto,1fr] gap-4 items-center">
+                      <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Before</p>
+                        <p className="text-sm font-medium text-slate-600 truncate">{log.originalName}.{log.extension}</p>
                       </div>
-                      <div className="grid grid-cols-2 gap-8 items-center">
-                        <div>
-                          <p className="text-[10px] text-slate-400 font-bold mb-1">Before</p>
-                          <p className="text-sm font-medium text-slate-600 truncate">{log.originalName}.{log.extension}</p>
-                        </div>
-                        <div>
-                          <p className="text-[10px] text-slate-400 font-bold mb-1">After</p>
-                          <p className="text-sm font-bold text-blue-700 truncate">{log.newName}</p>
-                        </div>
+                      <ChevronRight className="w-5 h-5 text-slate-200 hidden md:block" />
+                      <div className="bg-blue-50/50 p-3 rounded-xl border border-blue-100">
+                        <p className="text-[9px] font-bold text-blue-400 uppercase tracking-widest mb-1">After</p>
+                        <p className="text-sm font-black text-blue-700 truncate">{log.newName}</p>
                       </div>
-                      <div className="mt-3 pt-3 border-t border-slate-50 flex items-center justify-between">
-                        <p className="text-[10px] text-slate-400 font-mono">{log.targetPath}</p>
-                        <p className="text-[10px] font-bold text-slate-500">{formatSize(log.size)}</p>
+                    </div>
+                    
+                    {log.message && log.status === 'error' && (
+                      <div className="mt-3 p-3 bg-red-50 text-red-600 rounded-xl text-xs flex items-center gap-2">
+                        <AlertCircle className="w-4 h-4" />
+                        {log.message}
                       </div>
+                    )}
+                    
+                    <div className="mt-4 pt-4 border-t border-slate-50 flex items-center justify-between">
+                      <p className="text-[10px] font-bold text-slate-400 truncate max-w-[80%]">
+                        <span className="opacity-50">Saved to:</span> {log.targetPath}
+                      </p>
+                      <p className="text-[10px] font-black text-slate-500">{formatSize(log.size)}</p>
                     </div>
                   </div>
                 ))}
               </div>
             </div>
 
-            <div className="p-6 border-t border-slate-100 bg-slate-50/50 flex justify-end gap-3">
+            <div className="p-7 border-t border-slate-100 bg-white flex justify-end">
               <button 
-                onClick={() => setShowLog(false)}
-                className="px-6 py-2 bg-slate-900 text-white rounded-lg font-bold hover:bg-slate-800 transition-colors"
+                onClick={() => setShowLog(false)} 
+                className="px-10 py-3 bg-slate-900 text-white rounded-2xl font-bold hover:bg-black transition-all shadow-xl shadow-slate-200 active:scale-95"
               >
-                閉じる
+                レポートを閉じる
               </button>
             </div>
           </div>
         </div>
       )}
 
-      <footer className="bg-slate-100 py-3 px-6 text-center border-t border-slate-200">
+      <footer className="bg-slate-50 py-3 px-6 text-center border-t border-slate-200">
         <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-          Smart File Organizer Pro v1.0.4 • Local Environment Only • Security Compliant
+          Smart File Organizer Pro • Finalized v1.2.0 • Real Move & Rename Logic Ready
         </p>
       </footer>
+      
+      <style>{`
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #cbd5e1; }
+      `}</style>
     </div>
   );
 };
